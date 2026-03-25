@@ -1,0 +1,50 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+:root {
+  --bg-deep: #0a1a1f;
+  --bg-panel: #10262d;
+  --bg-soft: #15343d;
+  --line: #2d5d65;
+  --text-main: #e5f4f1;
+  --text-subtle: #9ec3c6;
+  --accent: #f5b971;
+  --accent-strong: #eb9f3d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100vh;
+}
+
+body {
+  margin: 0;
+  font-family: 'Space Grotesk', sans-serif;
+  color: var(--text-main);
+  background:
+    radial-gradient(circle at 12% 12%, rgba(245, 185, 113, 0.16), transparent 35%),
+    radial-gradient(circle at 85% 2%, rgba(56, 160, 145, 0.2), transparent 28%),
+    linear-gradient(145deg, #071217, #10262d 45%, #0d2128);
+}
+
+.oracle-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.oracle-scrollbar::-webkit-scrollbar-thumb {
+  background: #315f67;
+  border-radius: 999px;
+}
+
+.oracle-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.mono {
+  font-family: 'IBM Plex Mono', monospace;
+}

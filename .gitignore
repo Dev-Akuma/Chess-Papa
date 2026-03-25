@@ -1,0 +1,67 @@
+# ------------------------------
+# Python
+# ------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments
+env/
+.venv/
+venv/
+
+# ------------------------------
+# Environment / secrets
+# ------------------------------
+.env
+.env.*
+!.env.example
+
+# ------------------------------
+# Node / frontend
+# ------------------------------
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/.vite/
+frontend/*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ------------------------------
+# Editors / OS
+# ------------------------------
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ------------------------------
+# Build artifacts / binaries
+# ------------------------------
+*.zip
+*.exe
+stockfish/
+stockfish/src/stockfish
+stockfish/src/stockfish.exe
+stockfish/src/*.o
+stockfish/src/*.obj
+stockfish/src/*.dll
+stockfish/src/*.a
+stockfish/src/*.lib
