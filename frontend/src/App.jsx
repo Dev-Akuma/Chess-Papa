@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Chessboard } from 'react-chessboard'
 import { Chess } from 'chess.js'
 import axios from 'axios'
@@ -14,6 +14,14 @@ function App() {
   const [analysis, setAnalysis] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [liveError, setLiveError] = useState('')
+  const [isLiveAnalyzing, setIsLiveAnalyzing] = useState(false)
+
+  const [baseDepth, setBaseDepth] = useState(10)
+  const [autoDepthEnabled, setAutoDepthEnabled] = useState(true)
+  const [maxAutoDepth, setMaxAutoDepth] = useState(22)
+  const [liveEval, setLiveEval] = useState(null)
+  const [dynamicMoveScores, setDynamicMoveScores] = useState({})
 
   const initialFen = new Chess().fen()
   const [positions, setPositions] = useState([initialFen])
@@ -21,8 +29,96 @@ function App() {
   const [currentMove, setCurrentMove] = useState(0)
   const [game, setGame] = useState(new Chess())
   const [isFreePlay, setIsFreePlay] = useState(false)
-  const [dropDebug, setDropDebug] = useState('No drop yet')
-  const [fenDraft, setFenDraft] = useState(new Chess().fen())
+  const [selectedSquare, setSelectedSquare] = useState(null)
+  const [legalTargetSquares, setLegalTargetSquares] = useState([])
+  const [checkedKingSquare, setCheckedKingSquare] = useState(null)
+
+  const stableSinceRef = useRef(Date.now())
+  const lastFenRef = useRef(initialFen)
+  const lastEvalRef = useRef(null)
+  const requestIdRef = useRef(0)
+
+  const getDynamicDepth = (elapsedMs) => {
+    if (!autoDepthEnabled) {
+      return baseDepth
+    }
+
+    const elapsedSeconds = elapsedMs / 1000
+    const gradualBoost = Math.floor(elapsedSeconds / 6)
+    const smoothBoost = Math.floor(Math.sqrt(Math.max(elapsedSeconds, 0) / 2))
+    const dynamicDepth = baseDepth + gradualBoost + smoothBoost
+
+    return Math.min(Math.max(dynamicDepth, baseDepth), maxAutoDepth)
+  }
+
+  const clearSelectionHighlights = () => {
+    setSelectedSquare(null)
+    setLegalTargetSquares([])
+  }
+
+  const getKingSquare = (boardState, kingColor) => {
+    const files = 'abcdefgh'
+    const matrix = boardState.board()
+
+    for (let rankIndex = 0; rankIndex < matrix.length; rankIndex += 1) {
+      const rank = matrix[rankIndex]
+      for (let fileIndex = 0; fileIndex < rank.length; fileIndex += 1) {
+        const piece = rank[fileIndex]
+        if (piece && piece.type === 'k' && piece.color === kingColor) {
+          return `${files[fileIndex]}${8 - rankIndex}`
+        }
+      }
+    }
+
+    return null
+  }
+
+  const updateSelectionForSquare = (square) => {
+    if (!square) {
+      clearSelectionHighlights()
+      return
+    }
+
+    const piece = game.get(square)
+    if (!piece || piece.color !== game.turn()) {
+      clearSelectionHighlights()
+      return
+    }
+
+    const legalMoves = game.moves({ square, verbose: true })
+    setSelectedSquare(square)
+    setLegalTargetSquares(legalMoves.map((move) => move.to))
+  }
+
+  const customSquareStyles = useMemo(() => {
+    const styles = {}
+
+    if (selectedSquare) {
+      styles[selectedSquare] = {
+        background:
+          'radial-gradient(circle, rgba(245,185,113,0.58) 10%, rgba(245,185,113,0.26) 55%, rgba(16,38,45,0.32) 100%)',
+        boxShadow: 'inset 0 0 0 2px rgba(245,185,113,0.85)',
+      }
+    }
+
+    legalTargetSquares.forEach((square) => {
+      styles[square] = {
+        background:
+          'radial-gradient(circle, rgba(245,185,113,0.65) 20%, rgba(245,185,113,0.25) 34%, rgba(16,38,45,0.15) 66%, rgba(16,38,45,0.05) 100%)',
+        boxShadow: 'inset 0 0 0 1px rgba(245,185,113,0.7)',
+      }
+    })
+
+    if (checkedKingSquare) {
+      styles[checkedKingSquare] = {
+        background:
+          'radial-gradient(circle, rgba(220,38,38,0.82) 22%, rgba(153,27,27,0.5) 52%, rgba(127,29,29,0.18) 100%)',
+        boxShadow: 'inset 0 0 0 2px rgba(254,202,202,0.85)',
+      }
+    }
+
+    return styles
+  }, [selectedSquare, legalTargetSquares, checkedKingSquare])
 
   const currentInsight = useMemo(() => {
     if (!currentMove || analysis.length === 0) {
@@ -31,20 +127,135 @@ function App() {
     return analysis[currentMove - 1] ?? null
   }, [analysis, currentMove])
 
+  const effectiveInsight = useMemo(() => {
+    if (liveEval && currentInsight) {
+      return {
+        ...currentInsight,
+        evaluation: liveEval.evaluation,
+        insight: liveEval.insight,
+      }
+    }
+
+    if (liveEval && !currentInsight) {
+      return {
+        move_number: currentMove,
+        san: currentMove === 0 ? 'Start position' : 'Current position',
+        evaluation: liveEval.evaluation,
+        insight: liveEval.insight,
+      }
+    }
+
+    return currentInsight
+  }, [currentInsight, liveEval])
+
+  useEffect(() => {
+    if (lastFenRef.current !== game.fen()) {
+      lastFenRef.current = game.fen()
+      stableSinceRef.current = Date.now()
+      lastEvalRef.current = null
+      setLiveEval(null)
+      setLiveError('')
+    }
+  }, [game])
+
+  useEffect(() => {
+    const kingInCheck =
+      (typeof game.inCheck === 'function' && game.inCheck()) ||
+      (typeof game.isCheck === 'function' && game.isCheck())
+
+    if (!kingInCheck) {
+      setCheckedKingSquare(null)
+      return
+    }
+
+    setCheckedKingSquare(getKingSquare(game, game.turn()))
+  }, [game])
+
+  useEffect(() => {
+    let cancelled = false
+    let timeoutId = null
+
+    const runLiveAnalysis = async () => {
+      const elapsedMs = Date.now() - stableSinceRef.current
+      const targetDepth = getDynamicDepth(elapsedMs)
+      const requestId = requestIdRef.current + 1
+      requestIdRef.current = requestId
+
+      setIsLiveAnalyzing(true)
+
+      try {
+        const response = await axios.post('http://127.0.0.1:8000/analyze-position', {
+          fen: game.fen(),
+          depth: targetDepth,
+          previous_eval: lastEvalRef.current,
+        })
+
+        if (cancelled || requestId !== requestIdRef.current) {
+          return
+        }
+
+        const nextLiveEval = response.data
+        lastEvalRef.current = nextLiveEval.evaluation
+        setLiveEval(nextLiveEval)
+        setLiveError('')
+
+        if (currentMove > 0 && !isFreePlay) {
+          setDynamicMoveScores((previous) => ({
+            ...previous,
+            [currentMove]: {
+              evaluation: nextLiveEval.evaluation,
+              depth: nextLiveEval.depth_used,
+            },
+          }))
+        }
+      } catch (caughtError) {
+        if (!cancelled) {
+          const detail = caughtError?.response?.data?.detail || caughtError.message
+          setLiveError(`Live analysis failed: ${detail}`)
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLiveAnalyzing(false)
+          timeoutId = window.setTimeout(runLiveAnalysis, autoDepthEnabled ? 1500 : 2200)
+        }
+      }
+    }
+
+    runLiveAnalysis()
+
+    return () => {
+      cancelled = true
+      if (timeoutId) {
+        window.clearTimeout(timeoutId)
+      }
+    }
+  }, [game, baseDepth, autoDepthEnabled, maxAutoDepth, currentMove, isFreePlay])
+
   const handleGoToMove = (moveIndex) => {
     const maxIndex = Math.max(positions.length - 1, 0)
     const clamped = Math.min(Math.max(moveIndex, 0), maxIndex)
     setCurrentMove(clamped)
     setIsFreePlay(false)
     setGame(new Chess(positions[clamped] || initialFen))
+    clearSelectionHighlights()
+  }
+
+  const handleSquareClick = (square) => {
+    if (selectedSquare === square) {
+      clearSelectionHighlights()
+      return
+    }
+
+    updateSelectionForSquare(square)
+  }
+
+  const handlePieceDragBegin = (_piece, sourceSquare) => {
+    updateSelectionForSquare(sourceSquare)
   }
 
   const handlePieceDrop = (source, target) => {
     try {
-      setDropDebug(`Drop triggered: ${source} -> ${target ?? 'none'}`)
-
       if (!target) {
-        setDropDebug(`Drop cancelled: ${source} -> none`)
         return false
       }
 
@@ -56,43 +267,16 @@ function App() {
       })
 
       if (!move) {
-        setDropDebug(`Illegal move: ${source} -> ${target} (turn ${game.turn()})`)
         return false
       }
 
       setGame(newGame)
       setIsFreePlay(true)
-      setDropDebug(`Move applied: ${source} -> ${target}`)
+      clearSelectionHighlights()
       return true
     } catch (dropError) {
-      const message = dropError instanceof Error ? dropError.message : String(dropError)
-      setDropDebug(`Drop error: ${message}`)
       return false
     }
-  }
-
-  const handleApplyFen = () => {
-    try {
-      const nextGame = new Chess(fenDraft.trim())
-      setGame(nextGame)
-      setDropDebug('Manual FEN applied')
-      setIsFreePlay(true)
-    } catch (fenError) {
-      const message = fenError instanceof Error ? fenError.message : String(fenError)
-      setDropDebug(`Invalid FEN: ${message}`)
-    }
-  }
-
-  const handleForceF2F4 = () => {
-    const forced = new Chess(game.fen())
-    const move = forced.move({ from: 'f2', to: 'f4', promotion: 'q' })
-    if (!move) {
-      setDropDebug('Force move failed: f2 -> f4 illegal in current position')
-      return
-    }
-    setGame(forced)
-    setDropDebug('Force move applied: f2 -> f4')
-    setIsFreePlay(true)
   }
 
   const handleAnalyze = async () => {
@@ -105,9 +289,12 @@ function App() {
     setError('')
 
     try {
-      const response = await axios.post('http://127.0.0.1:8000/analyze-full-game', { pgn })
+      const response = await axios.post('http://127.0.0.1:8000/analyze-full-game', { pgn, depth: baseDepth })
       const backendAnalysis = response.data.analysis ?? []
       setAnalysis(backendAnalysis)
+      setDynamicMoveScores({})
+      setLiveEval(null)
+      lastEvalRef.current = null
 
       const parser = new Chess()
       const navigator = new Chess()
@@ -168,6 +355,7 @@ function App() {
       setCurrentMove(0)
       setIsFreePlay(false)
       setGame(new Chess(nextPositions[0] ?? initialFen))
+      clearSelectionHighlights()
     } catch (caughtError) {
       const detail = caughtError?.response?.data?.detail || caughtError.message
       setError(`Analysis failed: ${detail}`)
@@ -177,6 +365,8 @@ function App() {
   }
 
   const boardFen = game.fen()
+  const stableSeconds = Math.floor((Date.now() - stableSinceRef.current) / 1000)
+  const currentDynamicDepth = getDynamicDepth(Date.now() - stableSinceRef.current)
 
   return (
     <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 p-4 md:p-8">
@@ -198,12 +388,81 @@ function App() {
             <Chessboard
               position={boardFen}
               onPieceDrop={handlePieceDrop}
+              onPieceDragBegin={handlePieceDragBegin}
+              onSquareClick={handleSquareClick}
+              customSquareStyles={customSquareStyles}
               arePiecesDraggable={true}
               animationDuration={220}
             />
           </div>
 
           <div className="mt-5 rounded-xl border border-[#2d5d65] bg-[#15343d]/60 p-4">
+            <div className="rounded-lg border border-[#2d5d65] bg-[#10262d] p-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <p className="mono text-xs uppercase tracking-widest text-[#9ec3c6]">Depth Controls</p>
+                <label className="flex items-center gap-2 text-xs text-[#d2e8e5]">
+                  <input
+                    type="checkbox"
+                    checked={autoDepthEnabled}
+                    onChange={(event) => setAutoDepthEnabled(event.target.checked)}
+                    className="accent-[#f5b971]"
+                  />
+                  Auto depth grow
+                </label>
+              </div>
+
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div>
+                  <p className="text-xs text-[#9ec3c6]">Base depth: {baseDepth}</p>
+                  <input
+                    type="range"
+                    min={6}
+                    max={18}
+                    value={baseDepth}
+                    onChange={(event) => {
+                      const nextBaseDepth = Number(event.target.value)
+                      setBaseDepth(nextBaseDepth)
+                      if (nextBaseDepth > maxAutoDepth) {
+                        setMaxAutoDepth(nextBaseDepth)
+                      }
+                    }}
+                    className="mt-2 w-full accent-[#f5b971]"
+                  />
+                </div>
+                <div>
+                  <p className="text-xs text-[#9ec3c6]">Max auto depth: {maxAutoDepth}</p>
+                  <input
+                    type="range"
+                    min={10}
+                    max={24}
+                    value={maxAutoDepth}
+                    onChange={(event) => {
+                      const nextMaxDepth = Number(event.target.value)
+                      setMaxAutoDepth(Math.max(nextMaxDepth, baseDepth))
+                    }}
+                    className="mt-2 w-full accent-[#f5b971]"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                <p className="rounded-md border border-[#2d5d65] bg-[#0f232a] px-2 py-1 text-[#9ec3c6]">
+                  Stable: {stableSeconds}s
+                </p>
+                <p className="rounded-md border border-[#2d5d65] bg-[#0f232a] px-2 py-1 text-[#f5b971]">
+                  Dynamic depth: {currentDynamicDepth}
+                </p>
+                <p className="rounded-md border border-[#2d5d65] bg-[#0f232a] px-2 py-1 text-[#d2e8e5]">
+                  {isLiveAnalyzing ? 'Live eval running...' : 'Live eval idle'}
+                </p>
+                {liveEval?.best_move && (
+                  <p className="rounded-md border border-[#2d5d65] bg-[#0f232a] px-2 py-1 text-[#9ec3c6]">
+                    Best move: {liveEval.best_move}
+                  </p>
+                )}
+              </div>
+            </div>
+
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
@@ -246,42 +505,11 @@ function App() {
                   Free play mode
                 </p>
               )}
-              <p className="rounded-md border border-[#2d5d65] bg-[#0f232a] px-2 py-1 text-xs text-[#9ec3c6]">
-                {dropDebug}
-              </p>
-            </div>
-
-            <div className="mt-3 rounded-lg border border-[#2d5d65] bg-[#10262d] p-3">
-              <p className="mono text-xs uppercase tracking-widest text-[#9ec3c6]">Controlled Position FEN</p>
-              <p className="mt-1 break-all text-xs text-[#d2e8e5]">{boardFen}</p>
-              <textarea
-                value={fenDraft}
-                onChange={(event) => setFenDraft(event.target.value)}
-                className="mt-2 h-20 w-full rounded-lg border border-[#2d5d65] bg-[#0f232a] p-2 text-xs text-[#e5f4f1] outline-none focus:border-[#f5b971]"
-              />
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={handleApplyFen}
-                  className="rounded-lg border border-[#2d5d65] bg-[#15343d] px-3 py-1.5 text-xs text-[#e5f4f1] hover:bg-[#1b3d46]"
-                >
-                  Apply FEN
-                </button>
-                <button
-                  type="button"
-                  onClick={handleForceF2F4}
-                  className="rounded-lg border border-[#2d5d65] bg-[#15343d] px-3 py-1.5 text-xs text-[#e5f4f1] hover:bg-[#1b3d46]"
-                >
-                  Force f2 to f4
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFenDraft(boardFen)}
-                  className="rounded-lg border border-[#2d5d65] bg-[#15343d] px-3 py-1.5 text-xs text-[#e5f4f1] hover:bg-[#1b3d46]"
-                >
-                  Load Current FEN
-                </button>
-              </div>
+              {checkedKingSquare && (
+                <p className="rounded-md border border-red-300/60 bg-red-950/60 px-2 py-1 text-xs text-red-100">
+                  Check: {game.turn() === 'w' ? 'White' : 'Black'} king on {checkedKingSquare}
+                </p>
+              )}
             </div>
 
             <input
@@ -294,19 +522,20 @@ function App() {
             />
 
             <div className="mt-4 rounded-lg border border-[#2d5d65] bg-[#10262d] p-3">
-              {currentInsight ? (
+              {effectiveInsight ? (
                 <>
                   <p className="mono text-xs uppercase tracking-widest text-[#9ec3c6]">Current Insight</p>
                   <p className="mt-1 text-base font-semibold text-[#e5f4f1]">
-                    Move {currentInsight.move_number}: {currentInsight.san}
+                    Move {effectiveInsight.move_number}: {effectiveInsight.san}
                   </p>
-                  <p className="mono text-sm text-[#f5b971]">Eval: {currentInsight.evaluation.toFixed(2)}</p>
-                  <p className="mt-2 text-sm text-[#d2e8e5]">{currentInsight.insight}</p>
+                  <p className="mono text-sm text-[#f5b971]">Eval: {effectiveInsight.evaluation.toFixed(2)}</p>
+                  <p className="mt-2 text-sm text-[#d2e8e5]">{effectiveInsight.insight}</p>
                 </>
               ) : (
                 <p className="text-sm text-[#9ec3c6]">Use the controller to inspect any move after analysis completes.</p>
               )}
             </div>
+            {liveError && <p className="mt-3 text-xs text-red-300">{liveError}</p>}
           </div>
         </section>
 
@@ -342,6 +571,7 @@ function App() {
 
             {moveList.map((move) => {
               const related = analysis[move.index - 1]
+              const dynamic = dynamicMoveScores[move.index]
               const isActive = move.index === currentMove
 
               return (
@@ -359,8 +589,11 @@ function App() {
                     <p className="font-semibold text-[#e5f4f1]">
                       {move.index}. {move.san}
                     </p>
-                    {related && (
-                      <span className="mono text-xs text-[#f5b971]">{related.evaluation.toFixed(2)}</span>
+                    {(dynamic || related) && (
+                      <span className="mono text-xs text-[#f5b971]">
+                        {(dynamic?.evaluation ?? related?.evaluation ?? 0).toFixed(2)}
+                        {dynamic ? ` d${dynamic.depth}` : ''}
+                      </span>
                     )}
                   </div>
                   <p className="mt-1 text-xs text-[#9ec3c6]">
@@ -389,14 +622,14 @@ function App() {
             <div>
               <p className="mono text-xs uppercase tracking-widest text-[#9ec3c6]">Evaluation</p>
               <p className="mt-1 text-xl font-semibold text-[#f5b971]">
-                {currentInsight ? currentInsight.evaluation.toFixed(2) : '--'}
+                {effectiveInsight ? effectiveInsight.evaluation.toFixed(2) : '--'}
               </p>
             </div>
 
             <div>
               <p className="mono text-xs uppercase tracking-widest text-[#9ec3c6]">Stockfish Insight</p>
               <p className="mt-1 text-sm text-[#d9efec]">
-                {currentInsight ? currentInsight.insight : 'Run analysis and pick a move to see engine feedback.'}
+                {effectiveInsight ? effectiveInsight.insight : 'Run analysis and pick a move to see engine feedback.'}
               </p>
             </div>
           </div>

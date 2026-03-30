@@ -1,7 +1,12 @@
 from fastapi import FastAPI, HTTPException
-from .schemas import ChessGameRequest, ChessGameResponse
+from .schemas import (
+    ChessGameRequest,
+    ChessGameResponse,
+    PositionAnalysisRequest,
+    PositionAnalysisResponse,
+)
 from fastapi.middleware.cors import CORSMiddleware
-from .engine import analyze_game_pgn
+from .engine import analyze_game_pgn, analyze_position_fen
 
 app = FastAPI(title="Chess Oracle")
 
@@ -32,6 +37,24 @@ async def post_mortem(request: ChessGameRequest):
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid PGN: {str(e)}")
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail=f"Engine setup error: {str(e)}")
+    except Exception as e:
+        error_text = str(e) or repr(e)
+        raise HTTPException(status_code=500, detail=f"Engine Error: {error_text}")
+
+
+@app.post("/analyze-position", response_model=PositionAnalysisResponse)
+async def analyze_position(request: PositionAnalysisRequest):
+    try:
+        result = await analyze_position_fen(
+            fen=request.fen,
+            depth=request.depth or 10,
+            previous_eval=request.previous_eval,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:
         raise HTTPException(status_code=500, detail=f"Engine setup error: {str(e)}")
     except Exception as e:
