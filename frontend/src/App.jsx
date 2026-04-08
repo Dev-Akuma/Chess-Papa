@@ -10,12 +10,26 @@ import {
   ChevronsRight,
   Clock,
   Download,
+  LogOut,
   Trash2,
   X,
 } from 'lucide-react'
 
 function App() {
   const springApiBaseUrl = import.meta.env.VITE_SPRING_API_BASE_URL ?? 'http://127.0.0.1:8080'
+  
+  // Authentication state
+  const [token, setToken] = useState(localStorage.getItem('jwtToken') || null)
+  const [username, setUsername] = useState(localStorage.getItem('username') || null)
+  const [isAuthLoading, setIsAuthLoading] = useState(false)
+  const [authError, setAuthError] = useState('')
+  const [loginUsername, setLoginUsername] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [registerUsername, setRegisterUsername] = useState('')
+  const [registerPassword, setRegisterPassword] = useState('')
+  const [registerEmail, setRegisterEmail] = useState('')
+  const [isRegistering, setIsRegistering] = useState(false)
+  
   const [pgn, setPgn] = useState('')
   const [analysis, setAnalysis] = useState([])
   const [loading, setLoading] = useState(false)
@@ -50,6 +64,207 @@ function App() {
   const lastEvalRef = useRef(null)
   const requestIdRef = useRef(0)
   const boardContainerRef = useRef(null)
+
+  // Set up axios interceptor for JWT token
+  useEffect(() => {
+    const interceptor = axios.interceptors.request.use(
+      (config) => {
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`
+        }
+        return config
+      },
+      (error) => Promise.reject(error)
+    )
+    return () => axios.interceptors.request.eject(interceptor)
+  }, [token])
+
+  // Auth handlers
+  const handleLogin = async (e) => {
+    e.preventDefault()
+    setIsAuthLoading(true)
+    setAuthError('')
+    try {
+      const response = await axios.post(`${springApiBaseUrl}/api/auth/login`, {
+        username: loginUsername,
+        password: loginPassword,
+      })
+      setToken(response.data.token)
+      setUsername(response.data.username)
+      localStorage.setItem('jwtToken', response.data.token)
+      localStorage.setItem('username', response.data.username)
+      setLoginUsername('')
+      setLoginPassword('')
+    } catch (caughtError) {
+      const detail = caughtError?.response?.data?.detail || caughtError.message
+      setAuthError(`Login failed: ${detail}`)
+    } finally {
+      setIsAuthLoading(false)
+    }
+  }
+
+  const handleRegister = async (e) => {
+    e.preventDefault()
+    setIsAuthLoading(true)
+    setAuthError('')
+    try {
+      const response = await axios.post(`${springApiBaseUrl}/api/auth/register`, {
+        username: registerUsername,
+        password: registerPassword,
+        email: registerEmail,
+      })
+      setToken(response.data.token)
+      setUsername(response.data.username)
+      localStorage.setItem('jwtToken', response.data.token)
+      localStorage.setItem('username', response.data.username)
+      setRegisterUsername('')
+      setRegisterPassword('')
+      setRegisterEmail('')
+      setIsRegistering(false)
+    } catch (caughtError) {
+      const detail = caughtError?.response?.data?.detail || caughtError.message
+      setAuthError(`Registration failed: ${detail}`)
+    } finally {
+      setIsAuthLoading(false)
+    }
+  }
+
+  const handleLogout = () => {
+    setToken(null)
+    setUsername(null)
+    localStorage.removeItem('jwtToken')
+    localStorage.removeItem('username')
+    setPgn('')
+    setAnalysis([])
+    setHistoryEntries([])
+  }
+
+  // Redirect to login if not authenticated
+  if (!token) {
+    return (
+      <div className="min-h-screen bg-[#0f232a] flex items-center justify-center p-4">
+        <div className="w-full max-w-md rounded-2xl border border-[#2d5d65] bg-[#10262d] p-6 shadow-2xl">
+          <h1 className="text-3xl font-bold text-[#e5f4f1] text-center mb-2">Chess Papa</h1>
+          <p className="text-center text-[#9ec3c6] mb-6">Stockfish Analysis Console</p>
+
+          {authError && (
+            <p className="mb-4 rounded-lg border border-red-300/30 bg-red-950/50 px-3 py-2 text-sm text-red-200">
+              {authError}
+            </p>
+          )}
+
+          {!isRegistering ? (
+            // Login form
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className="block text-xs uppercase tracking-widest text-[#9ec3c6] mb-2">
+                  Username
+                </label>
+                <input
+                  type="text"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  className="w-full rounded-lg border border-[#2d5d65] bg-[#0f232a] px-3 py-2 text-[#e5f4f1] placeholder-[#6e979b] outline-none transition focus:border-[#f5b971]"
+                  placeholder="Enter username"
+                  disabled={isAuthLoading}
+                />
+              </div>
+              <div>
+                <label className="block text-xs uppercase tracking-widest text-[#9ec3c6] mb-2">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  className="w-full rounded-lg border border-[#2d5d65] bg-[#0f232a] px-3 py-2 text-[#e5f4f1] placeholder-[#6e979b] outline-none transition focus:border-[#f5b971]"
+                  placeholder="Enter password"
+                  disabled={isAuthLoading}
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isAuthLoading}
+                className="w-full rounded-lg bg-[#f5b971] px-4 py-2 font-semibold text-[#222] transition hover:bg-[#eb9f3d] disabled:opacity-70"
+              >
+                {isAuthLoading ? 'Logging in...' : 'Login'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsRegistering(true)
+                  setAuthError('')
+                }}
+                className="w-full rounded-lg border border-[#2d5d65] bg-[#10262d] px-4 py-2 font-semibold text-[#e5f4f1] transition hover:bg-[#1b3d46]"
+              >
+                Create Account
+              </button>
+            </form>
+          ) : (
+            // Register form
+            <form onSubmit={handleRegister} className="space-y-4">
+              <div>
+                <label className="block text-xs uppercase tracking-widest text-[#9ec3c6] mb-2">
+                  Username
+                </label>
+                <input
+                  type="text"
+                  value={registerUsername}
+                  onChange={(e) => setRegisterUsername(e.target.value)}
+                  className="w-full rounded-lg border border-[#2d5d65] bg-[#0f232a] px-3 py-2 text-[#e5f4f1] placeholder-[#6e979b] outline-none transition focus:border-[#f5b971]"
+                  placeholder="Choose username"
+                  disabled={isAuthLoading}
+                />
+              </div>
+              <div>
+                <label className="block text-xs uppercase tracking-widest text-[#9ec3c6] mb-2">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={registerEmail}
+                  onChange={(e) => setRegisterEmail(e.target.value)}
+                  className="w-full rounded-lg border border-[#2d5d65] bg-[#0f232a] px-3 py-2 text-[#e5f4f1] placeholder-[#6e979b] outline-none transition focus:border-[#f5b971]"
+                  placeholder="Enter email"
+                  disabled={isAuthLoading}
+                />
+              </div>
+              <div>
+                <label className="block text-xs uppercase tracking-widest text-[#9ec3c6] mb-2">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={registerPassword}
+                  onChange={(e) => setRegisterPassword(e.target.value)}
+                  className="w-full rounded-lg border border-[#2d5d65] bg-[#0f232a] px-3 py-2 text-[#e5f4f1] placeholder-[#6e979b] outline-none transition focus:border-[#f5b971]"
+                  placeholder="Choose password (min 6 chars)"
+                  disabled={isAuthLoading}
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isAuthLoading}
+                className="w-full rounded-lg bg-[#f5b971] px-4 py-2 font-semibold text-[#222] transition hover:bg-[#eb9f3d] disabled:opacity-70"
+              >
+                {isAuthLoading ? 'Creating account...' : 'Register'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsRegistering(false)
+                  setAuthError('')
+                }}
+                className="w-full rounded-lg border border-[#2d5d65] bg-[#10262d] px-4 py-2 font-semibold text-[#e5f4f1] transition hover:bg-[#1b3d46]"
+              >
+                Back to Login
+              </button>
+            </form>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   useEffect(() => {
     const loadPgnHistory = async () => {
@@ -453,6 +668,20 @@ function App() {
             <p className="mt-3 max-w-3xl text-sm text-[#9ec3c6] md:text-base">
               Paste a PGN, run Stockfish analysis, and inspect move-by-move evaluations with timeline controls.
             </p>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="text-right">
+              <p className="text-sm text-[#9ec3c6]">Logged in as</p>
+              <p className="text-lg font-semibold text-[#e5f4f1]">{username}</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="rounded-lg border border-[#2d5d65] bg-[#10262d] px-3 py-2 text-[#e5f4f1] transition hover:bg-[#1b3d46]"
+              title="Logout"
+            >
+              <LogOut size={18} />
+            </button>
           </div>
         </div>
       </header>
