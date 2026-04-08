@@ -3,17 +3,26 @@ import { Chessboard } from 'react-chessboard'
 import { Chess } from 'chess.js'
 import axios from 'axios'
 import {
+  Bot,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  Clock,
+  Download,
+  Trash2,
+  X,
 } from 'lucide-react'
 
 function App() {
+  const springApiBaseUrl = import.meta.env.VITE_SPRING_API_BASE_URL ?? 'http://127.0.0.1:8080'
   const [pgn, setPgn] = useState('')
   const [analysis, setAnalysis] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [historyError, setHistoryError] = useState('')
+  const [historyStatus, setHistoryStatus] = useState('')
+  const [historyEntries, setHistoryEntries] = useState([])
   const [liveError, setLiveError] = useState('')
   const [isLiveAnalyzing, setIsLiveAnalyzing] = useState(false)
 
@@ -28,6 +37,9 @@ function App() {
   const [moveList, setMoveList] = useState([])
   const [currentMove, setCurrentMove] = useState(0)
   const [game, setGame] = useState(new Chess())
+  const [boardWidth, setBoardWidth] = useState(560)
+  const [isNotesSidebarOpen, setIsNotesSidebarOpen] = useState(false)
+  const [isHistorySidebarOpen, setIsHistorySidebarOpen] = useState(false)
   const [isFreePlay, setIsFreePlay] = useState(false)
   const [selectedSquare, setSelectedSquare] = useState(null)
   const [legalTargetSquares, setLegalTargetSquares] = useState([])
@@ -37,6 +49,53 @@ function App() {
   const lastFenRef = useRef(initialFen)
   const lastEvalRef = useRef(null)
   const requestIdRef = useRef(0)
+  const boardContainerRef = useRef(null)
+
+  useEffect(() => {
+    const loadPgnHistory = async () => {
+      try {
+        const response = await axios.get(`${springApiBaseUrl}/api/pgn-history`, {
+          params: { limit: 12 },
+        })
+        setHistoryEntries(response.data ?? [])
+        setHistoryError('')
+      } catch (caughtError) {
+        const detail = caughtError?.response?.data?.detail || caughtError.message
+        setHistoryError(`Could not load Spring history: ${detail}`)
+      }
+    }
+
+    loadPgnHistory()
+  }, [springApiBaseUrl])
+
+  useEffect(() => {
+    const updateBoardWidth = () => {
+      const containerWidth = boardContainerRef.current?.clientWidth
+      if (!containerWidth) {
+        return
+      }
+
+      setBoardWidth(Math.max(260, Math.floor(containerWidth)))
+    }
+
+    updateBoardWidth()
+
+    const observer =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateBoardWidth) : null
+
+    if (observer && boardContainerRef.current) {
+      observer.observe(boardContainerRef.current)
+    }
+
+    window.addEventListener('resize', updateBoardWidth)
+
+    return () => {
+      if (observer) {
+        observer.disconnect()
+      }
+      window.removeEventListener('resize', updateBoardWidth)
+    }
+  }, [])
 
   const getDynamicDepth = (elapsedMs) => {
     if (!autoDepthEnabled) {
@@ -184,7 +243,7 @@ function App() {
       setIsLiveAnalyzing(true)
 
       try {
-        const response = await axios.post('http://127.0.0.1:8000/analyze-position', {
+        const response = await axios.post(`${springApiBaseUrl}/api/analyze/position`, {
           fen: game.fen(),
           depth: targetDepth,
           previous_eval: lastEvalRef.current,
@@ -289,7 +348,7 @@ function App() {
     setError('')
 
     try {
-      const response = await axios.post('http://127.0.0.1:8000/analyze-full-game', { pgn, depth: baseDepth })
+      const response = await axios.post(`${springApiBaseUrl}/api/analyze/full-game`, { pgn, depth: baseDepth })
       const backendAnalysis = response.data.analysis ?? []
       setAnalysis(backendAnalysis)
       setDynamicMoveScores({})
@@ -356,6 +415,22 @@ function App() {
       setIsFreePlay(false)
       setGame(new Chess(nextPositions[0] ?? initialFen))
       clearSelectionHighlights()
+
+      try {
+        const saveResponse = await axios.post(`${springApiBaseUrl}/api/pgn-history`, {
+          pgn,
+          depth: baseDepth,
+          moveCount: nextMoveList.length,
+        })
+
+        setHistoryEntries((previous) => [saveResponse.data, ...previous].slice(0, 12))
+        setHistoryError('')
+        setHistoryStatus('PGN saved to MySQL through Spring Boot.')
+      } catch (historyCaughtError) {
+        const detail = historyCaughtError?.response?.data?.detail || historyCaughtError.message
+        setHistoryStatus('')
+        setHistoryError(`Analysis worked, but save failed: ${detail}`)
+      }
     } catch (caughtError) {
       const detail = caughtError?.response?.data?.detail || caughtError.message
       setError(`Analysis failed: ${detail}`)
@@ -382,9 +457,9 @@ function App() {
         </div>
       </header>
 
-      <main className="grid grid-cols-1 gap-6 xl:grid-cols-[1.1fr_1fr_420px]">
+      <main className="grid grid-cols-1 gap-6 xl:grid-cols-[1.1fr_1fr]">
         <section className="rounded-2xl border border-[#2d5d65] bg-[#10262d]/85 p-4 shadow-[0_16px_42px_rgba(0,0,0,0.35)] md:p-6">
-          <div className="mx-auto w-full max-w-[720px]">
+          <div ref={boardContainerRef} className="mx-auto w-full max-w-[720px]">
             <Chessboard
               position={boardFen}
               onPieceDrop={handlePieceDrop}
@@ -393,6 +468,7 @@ function App() {
               customSquareStyles={customSquareStyles}
               arePiecesDraggable={true}
               animationDuration={220}
+              boardWidth={boardWidth}
             />
           </div>
 
@@ -558,11 +634,64 @@ function App() {
             {loading ? 'Stockfish is analyzing...' : 'Analyze Full Game'}
           </button>
 
+          {historyStatus && (
+            <p className="mt-3 rounded-lg border border-emerald-300/30 bg-emerald-950/40 px-3 py-2 text-sm text-emerald-200">
+              {historyStatus}
+            </p>
+          )}
+
           {error && (
             <p className="mt-3 rounded-lg border border-red-300/30 bg-red-950/50 px-3 py-2 text-sm text-red-200">
               {error}
             </p>
           )}
+
+          {historyError && (
+            <p className="mt-3 rounded-lg border border-amber-300/30 bg-amber-950/40 px-3 py-2 text-sm text-amber-100">
+              {historyError}
+            </p>
+          )}
+
+          <div className="mt-4 rounded-xl border border-[#2d5d65] bg-[#0f232a]/70 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="mono text-xs uppercase tracking-widest text-[#9ec3c6]">MySQL PGN History</p>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const response = await axios.get(`${springApiBaseUrl}/api/pgn-history`, {
+                      params: { limit: 12 },
+                    })
+                    setHistoryEntries(response.data ?? [])
+                    setHistoryError('')
+                  } catch (caughtError) {
+                    const detail = caughtError?.response?.data?.detail || caughtError.message
+                    setHistoryError(`Refresh failed: ${detail}`)
+                  }
+                }}
+                className="rounded-md border border-[#2d5d65] bg-[#10262d] px-2 py-1 text-xs text-[#e5f4f1] transition hover:bg-[#1b3d46]"
+              >
+                Refresh
+              </button>
+            </div>
+
+            <div className="mt-2 max-h-40 space-y-2 overflow-y-auto pr-1">
+              {historyEntries.length === 0 && <p className="text-xs text-[#9ec3c6]">No saved PGNs yet.</p>}
+
+              {historyEntries.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  onClick={() => setPgn(entry.pgn)}
+                  className="w-full rounded-lg border border-[#2d5d65] bg-[#10262d] px-3 py-2 text-left text-xs text-[#d2e8e5] transition hover:bg-[#18343c]"
+                >
+                  <p className="text-[#e5f4f1]">Depth {entry.depth} • Moves {entry.moveCount}</p>
+                  <p className="mt-1 text-[#9ec3c6]">{new Date(entry.createdAt).toLocaleString()}</p>
+                  <p className="mt-1 line-clamp-2">{entry.pgn}</p>
+                </button>
+              ))}
+            </div>
+          </div>
 
           <div className="oracle-scrollbar mt-4 max-h-[440px] space-y-2 overflow-y-auto pr-1">
             {moveList.length === 0 && (
@@ -604,41 +733,196 @@ function App() {
             })}
           </div>
         </section>
-
-        <aside className="rounded-2xl border border-[#2d5d65] bg-[#10262d]/90 p-4 md:p-6">
-          <h2 className="text-xl font-bold text-[#e5f4f1]">Engine Notes</h2>
-          <p className="mt-2 text-sm text-[#9ec3c6]">
-            Stockfish-only mode is active. This panel summarizes the selected move without any LLM assistance.
-          </p>
-
-          <div className="mt-4 space-y-3 rounded-xl border border-[#2d5d65] bg-[#0f232a] p-4">
-            <div>
-              <p className="mono text-xs uppercase tracking-widest text-[#9ec3c6]">Selected Ply</p>
-              <p className="mt-1 text-lg font-semibold text-[#e5f4f1]">
-                {currentInsight ? `${currentInsight.move_number}. ${currentInsight.san}` : 'No move selected'}
-              </p>
-            </div>
-
-            <div>
-              <p className="mono text-xs uppercase tracking-widest text-[#9ec3c6]">Evaluation</p>
-              <p className="mt-1 text-xl font-semibold text-[#f5b971]">
-                {effectiveInsight ? effectiveInsight.evaluation.toFixed(2) : '--'}
-              </p>
-            </div>
-
-            <div>
-              <p className="mono text-xs uppercase tracking-widest text-[#9ec3c6]">Stockfish Insight</p>
-              <p className="mt-1 text-sm text-[#d9efec]">
-                {effectiveInsight ? effectiveInsight.insight : 'Run analysis and pick a move to see engine feedback.'}
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-4 rounded-xl border border-[#2d5d65] bg-[#10262d] p-3 text-sm text-[#9ec3c6]">
-            Tip: Use the timeline slider and move list to review turning points, then switch to Free play mode to test alternatives.
-          </div>
-        </aside>
       </main>
+
+      {(isNotesSidebarOpen || isHistorySidebarOpen) && (
+        <button
+          type="button"
+          aria-label="Close sidebar"
+          onClick={() => {
+            setIsNotesSidebarOpen(false)
+            setIsHistorySidebarOpen(false)
+          }}
+          className="fixed inset-0 z-30 bg-black/45 backdrop-blur-[1px]"
+        />
+      )}
+
+      <aside
+        id="history-sidebar"
+        className={`fixed right-0 top-0 z-40 flex h-screen w-[min(94vw,420px)] flex-col border-l border-[#2d5d65] bg-[#0f232a]/96 p-4 shadow-[-18px_0_48px_rgba(0,0,0,0.45)] backdrop-blur transition-transform duration-300 md:p-6 ${
+          isHistorySidebarOpen ? 'translate-x-0' : 'translate-x-full'
+        }`}
+        aria-hidden={!isHistorySidebarOpen}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="mono text-xs uppercase tracking-[0.28em] text-[#9ec3c6]">Analysis History</p>
+            <h2 className="mt-2 text-2xl font-bold text-[#e5f4f1]">Past PGNs</h2>
+            <p className="mt-2 text-sm text-[#9ec3c6]">
+              Browse and review all analyzed games stored in MySQL. Click any to reload and inspect.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsHistorySidebarOpen(false)}
+            className="rounded-lg border border-[#2d5d65] bg-[#10262d] p-2 text-[#e5f4f1] transition hover:bg-[#1b3d46]"
+            title="Close History"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const response = await axios.get(`${springApiBaseUrl}/api/pgn-history`, {
+                  params: { limit: 20 },
+                })
+                setHistoryEntries(response.data ?? [])
+                setHistoryError('')
+              } catch (caughtError) {
+                const detail = caughtError?.response?.data?.detail || caughtError.message
+                setHistoryError(`Refresh failed: ${detail}`)
+              }
+            }}
+            className="rounded-lg border border-[#2d5d65] bg-[#10262d] px-3 py-2 text-xs text-[#e5f4f1] transition hover:bg-[#1b3d46]"
+          >
+            Refresh
+          </button>
+        </div>
+
+        {historyError && (
+          <p className="mt-3 rounded-lg border border-amber-300/30 bg-amber-950/40 px-3 py-2 text-xs text-amber-100">
+            {historyError}
+          </p>
+        )}
+
+        <div className="oracle-scrollbar mt-4 flex-1 space-y-2 overflow-y-auto pr-1">
+          {historyEntries.length === 0 && (
+            <p className="text-center text-sm text-[#9ec3c6]">
+              No past analyses yet. Analyze a game to see it here.
+            </p>
+          )}
+
+          {historyEntries.map((entry) => (
+            <div key={entry.id} className="rounded-lg border border-[#2d5d65] bg-[#10262d] p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <Clock size={14} className="text-[#9ec3c6]" />
+                    <p className="text-xs text-[#9ec3c6]">
+                      {new Date(entry.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                  <p className="mt-1 text-xs text-[#d2e8e5]">
+                    Depth {entry.depth} • {entry.moveCount} moves
+                  </p>
+                  <p className="mt-2 line-clamp-3 text-xs text-[#9ec3c6]">{entry.pgn}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPgn(entry.pgn)
+                    setIsHistorySidebarOpen(false)
+                  }}
+                  className="rounded-lg border border-[#2d5d65] bg-[#1b3d46] p-2 text-[#e5f4f1] transition hover:bg-[#254555]"
+                  title="Load PGN"
+                >
+                  <Download size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-4 rounded-lg border border-[#2d5d65] bg-[#10262d] p-3 text-xs text-[#9ec3c6]">
+          Click the download icon to load a saved PGN into the analyzer. Then click "Analyze Full Game" to re-run Stockfish evaluation.
+        </div>
+      </aside>
+
+      <aside
+        id="ai-assistance-sidebar"
+        className={`fixed right-0 top-0 z-40 flex h-screen w-[min(94vw,420px)] flex-col border-l border-[#2d5d65] bg-[#0f232a]/96 p-4 shadow-[-18px_0_48px_rgba(0,0,0,0.45)] backdrop-blur transition-transform duration-300 md:p-6 ${
+          isNotesSidebarOpen ? 'translate-x-0' : 'translate-x-full'
+        }`}
+        aria-hidden={!isNotesSidebarOpen}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="mono text-xs uppercase tracking-[0.28em] text-[#9ec3c6]">AI Assistance</p>
+            <h2 className="mt-2 text-2xl font-bold text-[#e5f4f1]">Engine Notes</h2>
+            <p className="mt-2 text-sm text-[#9ec3c6]">
+              Stockfish-only mode is active. This sidebar summarizes the selected move without any LLM assistance.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsNotesSidebarOpen(false)}
+            className="rounded-lg border border-[#2d5d65] bg-[#10262d] p-2 text-[#e5f4f1] transition hover:bg-[#1b3d46]"
+            title="Close AI Assistance"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="mt-5 space-y-3 rounded-xl border border-[#2d5d65] bg-[#102f37] p-4">
+          <div>
+            <p className="mono text-xs uppercase tracking-widest text-[#9ec3c6]">Selected Ply</p>
+            <p className="mt-1 text-lg font-semibold text-[#e5f4f1]">
+              {currentInsight ? `${currentInsight.move_number}. ${currentInsight.san}` : 'No move selected'}
+            </p>
+          </div>
+
+          <div>
+            <p className="mono text-xs uppercase tracking-widest text-[#9ec3c6]">Evaluation</p>
+            <p className="mt-1 text-xl font-semibold text-[#f5b971]">
+              {effectiveInsight ? effectiveInsight.evaluation.toFixed(2) : '--'}
+            </p>
+          </div>
+
+          <div>
+            <p className="mono text-xs uppercase tracking-widest text-[#9ec3c6]">Stockfish Insight</p>
+            <p className="mt-1 text-sm text-[#d9efec]">
+              {effectiveInsight ? effectiveInsight.insight : 'Run analysis and pick a move to see engine feedback.'}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-[#2d5d65] bg-[#10262d] p-3 text-sm text-[#9ec3c6]">
+          Tip: Use the timeline slider and move list to review turning points, then switch to Free play mode to test alternatives.
+        </div>
+      </aside>
+
+      <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setIsHistorySidebarOpen((previous) => !previous)
+            if (isNotesSidebarOpen) setIsNotesSidebarOpen(false)
+          }}
+          className="inline-flex items-center gap-2 rounded-full border border-[#2d5d65] bg-[#4b9ca8] px-4 py-2.5 text-sm font-semibold text-[#0f232a] shadow-[0_12px_28px_rgba(0,0,0,0.35)] transition hover:bg-[#3d8491]"
+          aria-expanded={isHistorySidebarOpen}
+          aria-controls="history-sidebar"
+        >
+          <Clock size={16} />
+          {isHistorySidebarOpen ? 'Hide History' : 'View History'}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setIsNotesSidebarOpen((previous) => !previous)
+            if (isHistorySidebarOpen) setIsHistorySidebarOpen(false)
+          }}
+          className="inline-flex items-center gap-2 rounded-full border border-[#2d5d65] bg-[#f5b971] px-4 py-2.5 text-sm font-semibold text-[#1b1b1b] shadow-[0_12px_28px_rgba(0,0,0,0.35)] transition hover:bg-[#eb9f3d]"
+          aria-expanded={isNotesSidebarOpen}
+          aria-controls="ai-assistance-sidebar"
+        >
+          <Bot size={16} />
+          {isNotesSidebarOpen ? 'Hide Insight' : 'AI Insight'}
+        </button>
+      </div>
     </div>
   )
 }
