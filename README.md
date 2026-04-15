@@ -26,6 +26,20 @@ Chess Papa is a full-stack chess analysis platform that lets you paste PGNs, run
 - MySQL-backed PGN history review panel
 - Reload any saved PGN for re-analysis
 
+## Screenshots
+
+### Evaluation Controller
+
+![Evaluation controller screenshot](evaluation_controller.png)
+
+### Login
+
+![Login screen screenshot](Login.png)
+
+### View
+
+![Analysis view screenshot](view.png)
+
 ## Prerequisites
 
 - JDK 25 or a compatible JDK for the Spring Boot demo project

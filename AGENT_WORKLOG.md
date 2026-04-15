@@ -18,3 +18,5 @@
   - Updated `frontend/src/App.jsx`:
     - Added `if (!token) return` guards before API calls to prevent requests before login.
     - Added `token` to dependency arrays for both useEffect hooks.
+  - Updated `README.md`:
+    - Added screenshots for `evaluation_controller.png`, `Login.png`, and `view.png`.
