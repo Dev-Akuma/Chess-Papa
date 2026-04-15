@@ -139,9 +139,8 @@ function App() {
     setHistoryEntries([])
   }
 
-  // Redirect to login if not authenticated
-  if (!token) {
-    return (
+  // Keep auth screen JSX ready, but do not early-return before all hooks run.
+  const authGate = !token ? (
       <div className="min-h-screen bg-[#0f232a] flex items-center justify-center p-4">
         <div className="w-full max-w-md rounded-2xl border border-[#2d5d65] bg-[#10262d] p-6 shadow-2xl">
           <h1 className="text-3xl font-bold text-[#e5f4f1] text-center mb-2">Chess Papa</h1>
@@ -263,11 +262,11 @@ function App() {
           )}
         </div>
       </div>
-    )
-  }
+  ) : null
 
   useEffect(() => {
     const loadPgnHistory = async () => {
+      if (!token) return
       try {
         const response = await axios.get(`${springApiBaseUrl}/api/pgn-history`, {
           params: { limit: 12 },
@@ -281,7 +280,7 @@ function App() {
     }
 
     loadPgnHistory()
-  }, [springApiBaseUrl])
+  }, [springApiBaseUrl, token])
 
   useEffect(() => {
     const updateBoardWidth = () => {
@@ -450,6 +449,7 @@ function App() {
     let timeoutId = null
 
     const runLiveAnalysis = async () => {
+      if (!token) return
       const elapsedMs = Date.now() - stableSinceRef.current
       const targetDepth = getDynamicDepth(elapsedMs)
       const requestId = requestIdRef.current + 1
@@ -503,7 +503,7 @@ function App() {
         window.clearTimeout(timeoutId)
       }
     }
-  }, [game, baseDepth, autoDepthEnabled, maxAutoDepth, currentMove, isFreePlay])
+  }, [game, baseDepth, autoDepthEnabled, maxAutoDepth, currentMove, isFreePlay, token])
 
   const handleGoToMove = (moveIndex) => {
     const maxIndex = Math.max(positions.length - 1, 0)
@@ -652,6 +652,10 @@ function App() {
     }
 
     setLoading(false)
+  }
+
+  if (authGate) {
+    return authGate
   }
 
   const boardFen = game.fen()
